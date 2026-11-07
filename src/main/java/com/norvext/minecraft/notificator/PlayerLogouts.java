@@ -15,11 +15,15 @@ import java.util.concurrent.TimeUnit;
 final class PlayerLogouts extends SavedData {
     private static final SavedDataType<PlayerLogouts> TYPE = new SavedDataType<>(
             Identifier.fromNamespaceAndPath(TelegramNotificator.MODID, "player_logouts"),
-            () -> new PlayerLogouts(Map.of()),
+            PlayerLogouts::new,
             Codec.unboundedMap(UUIDUtil.STRING_CODEC, Codec.LONG)
                     .xmap(PlayerLogouts::new, logouts -> logouts.lastLogout));
 
     private final Map<UUID, Long> lastLogout;
+
+    PlayerLogouts() {
+        this(Map.of());
+    }
 
     private PlayerLogouts(Map<UUID, Long> lastLogout) {
         this.lastLogout = new HashMap<>(lastLogout);

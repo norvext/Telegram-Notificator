@@ -1,11 +1,45 @@
 """Check mention policy through Minecraft and the Telegram HTTP endpoint."""
 
+from queue import Empty
+from uuid import UUID
+
 from telegram_server import dedicated_server, expect_message, main, vanilla_player
 
 
 def run_checks(directory, telegram, options):
     token = "123:integration_test"
     chat = -1001234567890
+
+    overflow_dir = directory / "overflow"
+    config_dir = overflow_dir / "config"
+    config_dir.mkdir(parents=True)
+    usernames = [f"user{index:028d}" for index in range(130)]
+    bindings = ", ".join(f'"{UUID(int=index + 1)}:{username}"' for index, username in enumerate(usernames))
+    (config_dir / "telegramnotificator-local.toml").write_text(
+        f'bindings = [{bindings}, "{UUID(int=1000)}:{usernames[0].upper()}", '
+        f'"{UUID(int=1)}:extra_username", "malformed", "{UUID(int=1001)}:invalid-name"]\n'
+    )
+    with dedicated_server(overflow_dir, telegram.server_port, options) as console:
+        console.send(f"telegram token set {token}")
+        console.wait_for("Токен сохранён")
+        console.send(f"telegram chat set {chat}")
+        console.wait_for("Группа уведомлений сохранена")
+        with vanilla_player(console, "Alex"):
+            header = "Alex вошёл на сервер Minecraft"
+            expect_message(telegram, token, chat, header + "\n" + " ".join("@" + name for name in usernames[:119]))
+            expect_message(telegram, token, chat, " ".join("@" + name for name in usernames[119:]))
+
+        telegram.responses.put((403, b'{"ok":false}', 0))
+        with vanilla_player(console, "Steve"):
+            expect_message(telegram, token, chat, "Steve вошёл на сервер Minecraft\n"
+                           + " ".join("@" + name for name in usernames[:119]))
+            console.wait_for("Не удалось отправить сообщение Telegram: HTTP 403")
+            try:
+                unexpected = telegram.requests.get(timeout=1)
+            except Empty:
+                pass
+            else:
+                raise AssertionError(f"Unexpected Telegram request after first chunk failed: {unexpected!r}")
 
     with dedicated_server(directory, telegram.server_port, options) as console:
         console.send(f"telegram token set {token}")

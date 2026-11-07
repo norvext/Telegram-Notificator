@@ -25,6 +25,20 @@ def run_checks(directory, telegram, options):
         console.wait_for("Пробное сообщение отправлено")
         expect_topic_message(telegram, TOPIC, TEST_MESSAGE)
 
+        config = directory / "config" / "telegramnotificator-local.toml"
+        backup = config.with_suffix(".backup")
+        config.rename(backup)
+        config.mkdir()
+        (config / "block_replacement").touch()
+        console.send(f"telegram chat set {CHAT - 1} {OPERATOR_TOPIC}")
+        console.wait_for("Не удалось сохранить настройки Telegram")
+        console.send("telegram test")
+        console.wait_for("Пробное сообщение отправлено")
+        expect_topic_message(telegram, TOPIC, TEST_MESSAGE)
+        (config / "block_replacement").unlink()
+        config.rmdir()
+        backup.rename(config)
+
         telegram.responses.put((400, b'{"ok":false,"description":"Bad Request: message thread not found"}', 0))
         console.send("telegram test")
         console.wait_for("Не удалось отправить сообщение Telegram: HTTP 400: проверьте группу и тему уведомлений")

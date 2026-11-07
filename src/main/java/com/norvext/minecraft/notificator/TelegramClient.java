@@ -11,6 +11,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
@@ -18,11 +19,15 @@ import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 final class TelegramClient {
+    static final int MAX_TEXT_LENGTH = 4096;
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final Pattern BOT_TOKEN = Pattern.compile("[0-9]+:[a-zA-Z0-9_-]+");
     private static final URI API = URI.create("https://api.telegram.org");
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+    private final HttpClient http = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(TIMEOUT)
+            .build();
     private final URI apiBase;
 
     TelegramClient() {
@@ -35,9 +40,9 @@ final class TelegramClient {
         return BOT_TOKEN.matcher(token).matches();
     }
 
-    CompletableFuture<String> send(String token, Config.Destination destination, String text) {
+    CompletableFuture<Optional<String>> send(String token, Config.Destination destination, String text) {
         if (!validToken(token)) {
-            return CompletableFuture.completedFuture("недопустимый формат токена");
+            return CompletableFuture.completedFuture(Optional.of("недопустимый формат токена"));
         }
 
         JsonObject body = new JsonObject();
@@ -59,17 +64,17 @@ final class TelegramClient {
                     return responseError(response, destination.topicId() != 0);
                 }
                 delivery.cancel(true);
-                return transportError(failure);
+                return Optional.of(transportError(failure));
             });
         } catch (RuntimeException failure) {
-            return CompletableFuture.completedFuture(transportError(failure));
+            return CompletableFuture.completedFuture(Optional.of(transportError(failure)));
         }
     }
 
-    private static String responseError(HttpResponse<String> response, boolean hasTopic) {
+    private static Optional<String> responseError(HttpResponse<String> response, boolean hasTopic) {
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
-            return switch (status) {
+            return Optional.of(switch (status) {
                 case 400 -> hasTopic
                         ? "HTTP 400: проверьте группу и тему уведомлений"
                         : "HTTP 400: проверьте группу уведомлений";
@@ -77,18 +82,18 @@ final class TelegramClient {
                 case 403 -> "HTTP 403: проверьте доступ бота к группе";
                 case 429 -> "HTTP 429: превышен лимит запросов";
                 default -> "HTTP " + status;
-            };
+            });
         }
         try {
             if (JsonParser.parseString(response.body()) instanceof JsonObject body
                     && body.get("ok") != null && body.get("ok").isJsonPrimitive()
                     && body.get("ok").getAsJsonPrimitive().isBoolean()) {
-                return body.get("ok").getAsBoolean() ? null : "Telegram отклонил запрос";
+                return body.get("ok").getAsBoolean() ? Optional.empty() : Optional.of("Telegram отклонил запрос");
             }
         } catch (JsonParseException ignored) {
             // Telegram responses may contain credentials or user data.
         }
-        return "некорректный ответ Telegram";
+        return Optional.of("некорректный ответ Telegram");
     }
 
     private static String transportError(Throwable failure) {

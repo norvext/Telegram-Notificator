@@ -12,22 +12,22 @@ import net.minecraft.server.dedicated.DedicatedServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
-import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
@@ -37,11 +37,11 @@ public class TelegramNotificator {
     public static final String MODID = "telegramnotificator";
     private static final Logger LOGGER = LogUtils.getLogger();
 
+    private final Config config = new Config();
     private final TelegramClient telegram = new TelegramClient();
     private boolean stopping;
 
-    public TelegramNotificator(ModContainer modContainer) {
-        modContainer.registerConfig(ModConfig.Type.LOCAL, Config.SPEC);
+    public TelegramNotificator() {
         NeoForge.EVENT_BUS.register(this);
     }
 
@@ -51,7 +51,7 @@ public class TelegramNotificator {
         for (var policy : Config.MentionPolicy.values()) {
             String mode = policy.name().toLowerCase(Locale.ROOT);
             mentions.then(literal(mode).executes(context -> saveSetting(context.getSource(),
-                    Config.MENTION_POLICY, policy, "Режим упоминаний сохранён: " + mode)));
+                    () -> config.saveMentionPolicy(policy), "Режим упоминаний сохранён: " + mode)));
         }
 
         event.getDispatcher().register(literal("telegram")
@@ -79,8 +79,9 @@ public class TelegramNotificator {
                                                 IntegerArgumentType.getInteger(context, "topic_id")))))))
                 .then(literal("rejoin").requires(TelegramNotificator::isAdmin)
                         .then(literal("set").then(argument("seconds", IntegerArgumentType.integer(0))
-                                .executes(context -> saveSetting(context.getSource(), Config.REJOIN_SECONDS,
-                                        IntegerArgumentType.getInteger(context, "seconds"), "Интервал перезахода сохранён")))))
+                                .executes(context -> saveSetting(context.getSource(),
+                                        () -> config.saveRejoinSeconds(IntegerArgumentType.getInteger(context, "seconds")),
+                                        "Интервал перезахода сохранён")))))
                 .then(mentions)
                 .then(literal("test").requires(TelegramNotificator::isAdmin)
                         .executes(context -> sendTest(context.getSource()))));
@@ -98,14 +99,14 @@ public class TelegramNotificator {
                         && source.getServer().getPlayerList().isOp(player.nameAndId()));
     }
 
-    private static int link(CommandSourceStack source, String username) {
+    private int link(CommandSourceStack source, String username) {
         if (!Config.validUsername(username)) {
             source.sendFailure(Component.literal("Недопустимый формат Telegram username"));
             return 0;
         }
 
         UUID playerId = source.getPlayer().getUUID();
-        Map<UUID, String> bindings = Config.bindings();
+        Map<UUID, String> bindings = config.bindings();
         boolean occupied = bindings.entrySet().stream()
                 .anyMatch(entry -> !entry.getKey().equals(playerId) && entry.getValue().equalsIgnoreCase(username));
         if (occupied) {
@@ -117,13 +118,13 @@ public class TelegramNotificator {
         return saveBindings(source, bindings, "Привязка сохранена");
     }
 
-    private static int unlinkSelf(CommandSourceStack source) throws CommandSyntaxException {
+    private int unlinkSelf(CommandSourceStack source) throws CommandSyntaxException {
         UUID playerId = source.getPlayerOrException().getUUID();
         return unlink(source, entry -> entry.getKey().equals(playerId));
     }
 
-    private static int unlink(CommandSourceStack source, Predicate<Map.Entry<UUID, String>> target) {
-        Map<UUID, String> bindings = Config.bindings();
+    private int unlink(CommandSourceStack source, Predicate<Map.Entry<UUID, String>> target) {
+        Map<UUID, String> bindings = config.bindings();
         if (!bindings.entrySet().removeIf(target)) {
             source.sendFailure(Component.literal("Привязка не найдена"));
             return 0;
@@ -131,41 +132,39 @@ public class TelegramNotificator {
         return saveBindings(source, bindings, "Привязка удалена");
     }
 
-    private static int saveBindings(CommandSourceStack source, Map<UUID, String> bindings, String success) {
-        return saveSetting(source, Config.BINDINGS, bindings.entrySet().stream()
-                .map(entry -> entry.getKey() + ":" + entry.getValue())
-                .toList(), success);
+    private int saveBindings(CommandSourceStack source, Map<UUID, String> bindings, String success) {
+        return saveSetting(source, () -> config.saveBindings(bindings), success);
     }
 
-    private static int setToken(CommandSourceStack source, String token) {
+    private int setToken(CommandSourceStack source, String token) {
         if (!TelegramClient.validToken(token)) {
             source.sendFailure(Component.literal("Недопустимый формат токена"));
             return 0;
         }
-        return saveSetting(source, Config.TOKEN, token, "Токен сохранён");
+        return saveSetting(source, () -> config.saveToken(token), "Токен сохранён");
     }
 
-    private static int removeToken(CommandSourceStack source) {
-        if (Config.TOKEN.get().isEmpty()) {
+    private int removeToken(CommandSourceStack source) {
+        if (config.token().isEmpty()) {
             source.sendFailure(Component.literal("Токен не задан"));
             return 0;
         }
-        return saveSetting(source, Config.TOKEN, "", "Токен удалён");
+        return saveSetting(source, () -> config.saveToken(""), "Токен удалён");
     }
 
-    private static int setChat(CommandSourceStack source, long chatId, int topicId) {
-        return saveSetting(source, () -> Config.saveDestination(chatId, topicId), "Группа уведомлений сохранена");
+    private int setChat(CommandSourceStack source, long chatId, int topicId) {
+        return saveSetting(source, () -> config.saveDestination(chatId, topicId), "Группа уведомлений сохранена");
     }
 
-    private static <T> int saveSetting(CommandSourceStack source, ModConfigSpec.ConfigValue<T> setting,
-                                       T value, String success) {
-        return saveSetting(source, () -> Config.save(setting, value), success);
+    @FunctionalInterface
+    private interface SaveSetting {
+        void run() throws IOException;
     }
 
-    private static int saveSetting(CommandSourceStack source, Runnable save, String success) {
+    private static int saveSetting(CommandSourceStack source, SaveSetting save, String success) {
         try {
             save.run();
-        } catch (RuntimeException failure) {
+        } catch (IOException | RuntimeException failure) {
             // Minecraft may log the entire command if an exception escapes its handler.
             LOGGER.warn("Не удалось сохранить настройки Telegram ({})", failure.getClass().getSimpleName());
             source.sendFailure(Component.literal("Не удалось сохранить настройки Telegram"));
@@ -179,24 +178,43 @@ public class TelegramNotificator {
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer player
                 && !PlayerLogouts.get(player.level().getServer()).suppressJoin(
-                        player.getUUID(), System.currentTimeMillis(), Config.REJOIN_SECONDS.get())) {
-            String mentions = mentionsFor(player);
-            String message = player.getGameProfile().name() + " вошёл на сервер Minecraft";
-            send(mentions.isEmpty() ? message : message + "\n" + mentions);
+                        player.getUUID(), System.currentTimeMillis(), config.rejoinSeconds())
+                && isConfigured()) {
+            send(joinMessages(player));
         }
     }
 
-    private static String mentionsFor(ServerPlayer player) {
-        var policy = Config.MENTION_POLICY.get();
+    private List<String> joinMessages(ServerPlayer player) {
+        String header = player.getGameProfile().name() + " вошёл на сервер Minecraft";
+        var messages = new ArrayList<String>();
+        var text = new StringBuilder(header);
+        char separator = '\n';
+        for (String username : recipients(player)) {
+            if (text.length() + 2 + username.length() > TelegramClient.MAX_TEXT_LENGTH) {
+                messages.add(text.toString());
+                text.setLength(0);
+            }
+            if (!text.isEmpty()) {
+                text.append(separator);
+            }
+            text.append('@').append(username);
+            separator = ' ';
+        }
+        messages.add(text.toString());
+        return messages;
+    }
+
+    private List<String> recipients(ServerPlayer player) {
+        var policy = config.mentionPolicy();
         if (policy == Config.MentionPolicy.NONE) {
-            return "";
+            return List.of();
         }
         var players = player.level().getServer().getPlayerList();
-        return Config.bindings().entrySet().stream()
+        return config.bindings().entrySet().stream()
                 .filter(entry -> !entry.getKey().equals(player.getUUID()))
                 .filter(entry -> policy == Config.MentionPolicy.ALL || players.getPlayer(entry.getKey()) == null)
-                .map(entry -> "@" + entry.getValue())
-                .collect(Collectors.joining(" "));
+                .map(Map.Entry::getValue)
+                .toList();
     }
 
     @SubscribeEvent
@@ -219,33 +237,36 @@ public class TelegramNotificator {
     }
 
     private int sendTest(CommandSourceStack source) {
-        var result = send("Пробное сообщение от Minecraft");
-        if (result == null) {
+        if (!isConfigured()) {
             source.sendFailure(Component.literal("Задайте токен и группу уведомлений"));
             return 0;
         }
 
-        result.thenAccept(error -> source.getServer().execute(() -> {
-            if (error == null) {
-                source.sendSuccess(() -> Component.literal("Пробное сообщение отправлено"), false);
+        send(List.of("Пробное сообщение от Minecraft")).thenAccept(error -> source.getServer().execute(() -> {
+            if (error.isPresent()) {
+                source.sendFailure(Component.literal("Пробное сообщение не отправлено: " + error.get()));
             } else {
-                source.sendFailure(Component.literal("Пробное сообщение не отправлено: " + error));
+                source.sendSuccess(() -> Component.literal("Пробное сообщение отправлено"), false);
             }
         }));
         return 1;
     }
 
-    private CompletableFuture<String> send(String text) {
-        String token = Config.TOKEN.get();
-        Config.Destination destination = Config.destination();
-        if (token.isEmpty() || destination.chatId() == 0) {
-            return null;
-        }
+    private boolean isConfigured() {
+        return !config.token().isEmpty() && config.destination().chatId() != 0;
+    }
 
-        return telegram.send(token, destination, text).thenApply(error -> {
-            if (error != null) {
-                LOGGER.warn("Не удалось отправить сообщение Telegram: {}", error);
-            }
+    private CompletableFuture<Optional<String>> send(List<String> messages) {
+        String token = config.token();
+        Config.Destination destination = config.destination();
+        var result = CompletableFuture.completedFuture(Optional.<String>empty());
+        for (String text : messages) {
+            result = result.thenCompose(error -> error.isPresent()
+                    ? CompletableFuture.completedFuture(error)
+                    : telegram.send(token, destination, text));
+        }
+        return result.thenApply(error -> {
+            error.ifPresent(reason -> LOGGER.warn("Не удалось отправить сообщение Telegram: {}", reason));
             return error;
         });
     }
