@@ -1,0 +1,13 @@
+{
+  "itemGroup.telegramnotificator": "Example Mod Tab",
+  "block.telegramnotificator.example_block": "Example Block",
+  "item.telegramnotificator.example_item": "Example Item",
+
+  "telegramnotificator.configuration.title": "Telegram Notificator Configs",
+  "telegramnotificator.configuration.section.telegramnotificator.common.toml": "Telegram Notificator Configs",
+  "telegramnotificator.configuration.section.telegramnotificator.common.toml.title": "Telegram Notificator Configs",
+  "telegramnotificator.configuration.items": "Item List",
+  "telegramnotificator.configuration.logDirtBlock": "Log Dirt Block",
+  "telegramnotificator.configuration.magicNumberIntroduction": "Magic Number Text",
+  "telegramnotificator.configuration.magicNumber": "Magic Number"
+}
