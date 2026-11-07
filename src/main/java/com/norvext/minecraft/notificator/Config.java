@@ -7,6 +7,7 @@ final class Config {
 
     static final ModConfigSpec.ConfigValue<String> TOKEN = BUILDER.define("token", "");
     static final ModConfigSpec.LongValue CHAT_ID = BUILDER.defineInRange("chatId", 0L, Long.MIN_VALUE, 0L);
+    static final ModConfigSpec.IntValue REJOIN_SECONDS = BUILDER.defineInRange("rejoinSeconds", 300, 0, Integer.MAX_VALUE);
     static final ModConfigSpec SPEC = BUILDER.build();
 
     static <T> void save(ModConfigSpec.ConfigValue<T> setting, T value) {

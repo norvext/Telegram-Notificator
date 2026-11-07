@@ -238,10 +238,10 @@ def run_checks(directory, telegram, options):
         expect_message(telegram, replacement_token, replacement_chat, test_message)
 
         telegram.responses.put((200, b'{"ok":true}', 6))
-        with vanilla_player(console, "Alex"):
-            expect_message(telegram, replacement_token, replacement_chat, "Alex вошёл на сервер Minecraft")
+        with vanilla_player(console, "Steve"):
+            expect_message(telegram, replacement_token, replacement_chat, "Steve вошёл на сервер Minecraft")
             console.send("list")
-            console.wait_for("players online: Alex", timeout=2)
+            console.wait_for("players online: Steve", timeout=2)
             console.wait_for("истекло время ожидания", timeout=7)
             assert telegram.requests.empty()
 
@@ -261,7 +261,7 @@ def run_checks(directory, telegram, options):
             assert replacement_token not in "".join(console.transcript)
 
 
-def main():
+def main(checks=run_checks):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="use only cached Gradle dependencies")
     options = ("--offline",) if parser.parse_args().offline else ()
@@ -270,7 +270,7 @@ def main():
         telegram.responses = queue.Queue()
         threading.Thread(target=telegram.serve_forever, daemon=True).start()
         try:
-            run_checks(Path(directory), telegram, options)
+            checks(Path(directory), telegram, options)
         finally:
             telegram.shutdown()
 

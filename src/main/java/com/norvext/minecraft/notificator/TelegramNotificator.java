@@ -1,5 +1,6 @@
 package com.norvext.minecraft.notificator;
 
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.logging.LogUtils;
@@ -17,6 +18,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
 
 import java.util.concurrent.CompletableFuture;
@@ -30,6 +32,7 @@ public class TelegramNotificator {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private final TelegramClient telegram = new TelegramClient();
+    private boolean stopping;
 
     public TelegramNotificator(ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.LOCAL, Config.SPEC);
@@ -47,6 +50,10 @@ public class TelegramNotificator {
                         .then(literal("set").then(argument("chat_id", LongArgumentType.longArg(Long.MIN_VALUE, -1))
                                 .executes(context -> saveSetting(context.getSource(), Config.CHAT_ID,
                                         LongArgumentType.getLong(context, "chat_id"), "Группа уведомлений сохранена")))))
+                .then(literal("rejoin").requires(TelegramNotificator::isAdmin)
+                        .then(literal("set").then(argument("seconds", IntegerArgumentType.integer(0))
+                                .executes(context -> saveSetting(context.getSource(), Config.REJOIN_SECONDS,
+                                        IntegerArgumentType.getInteger(context, "seconds"), "Интервал перезахода сохранён")))))
                 .then(literal("test").requires(TelegramNotificator::isAdmin)
                         .executes(context -> sendTest(context.getSource()))));
     }
@@ -90,8 +97,29 @@ public class TelegramNotificator {
 
     @SubscribeEvent
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) {
+        if (event.getEntity() instanceof ServerPlayer player
+                && !PlayerLogouts.get(player.level().getServer()).suppressJoin(
+                        player.getUUID(), System.currentTimeMillis(), Config.REJOIN_SECONDS.get())) {
             send(player.getGameProfile().name() + " вошёл на сервер Minecraft");
+        }
+    }
+
+    @SubscribeEvent
+    public void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (!stopping && event.getEntity() instanceof ServerPlayer player) {
+            PlayerLogouts.get(player.level().getServer()).record(player.getUUID(), System.currentTimeMillis());
+        }
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        // PlayerList removes online players after this event, producing further logout events.
+        stopping = true;
+        long stoppedAt = System.currentTimeMillis();
+        var server = event.getServer();
+        var logouts = PlayerLogouts.get(server);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            logouts.record(player.getUUID(), stoppedAt);
         }
     }
 
