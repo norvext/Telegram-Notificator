@@ -63,8 +63,12 @@ public class TelegramNotificator {
                         .then(literal("remove").executes(context -> removeToken(context.getSource()))))
                 .then(literal("chat").requires(TelegramNotificator::isAdmin)
                         .then(literal("set").then(argument("chat_id", LongArgumentType.longArg(Long.MIN_VALUE, -1))
-                                .executes(context -> saveSetting(context.getSource(), Config.CHAT_ID,
-                                        LongArgumentType.getLong(context, "chat_id"), "Группа уведомлений сохранена")))))
+                                .executes(context -> setChat(context.getSource(),
+                                        LongArgumentType.getLong(context, "chat_id"), 0))
+                                .then(argument("topic_id", IntegerArgumentType.integer(1))
+                                        .executes(context -> setChat(context.getSource(),
+                                                LongArgumentType.getLong(context, "chat_id"),
+                                                IntegerArgumentType.getInteger(context, "topic_id")))))))
                 .then(literal("rejoin").requires(TelegramNotificator::isAdmin)
                         .then(literal("set").then(argument("seconds", IntegerArgumentType.integer(0))
                                 .executes(context -> saveSetting(context.getSource(), Config.REJOIN_SECONDS,
@@ -140,10 +144,18 @@ public class TelegramNotificator {
         return saveSetting(source, Config.TOKEN, "", "Токен удалён");
     }
 
+    private static int setChat(CommandSourceStack source, long chatId, int topicId) {
+        return saveSetting(source, () -> Config.saveDestination(chatId, topicId), "Группа уведомлений сохранена");
+    }
+
     private static <T> int saveSetting(CommandSourceStack source, ModConfigSpec.ConfigValue<T> setting,
                                        T value, String success) {
+        return saveSetting(source, () -> Config.save(setting, value), success);
+    }
+
+    private static int saveSetting(CommandSourceStack source, Runnable save, String success) {
         try {
-            Config.save(setting, value);
+            save.run();
         } catch (RuntimeException failure) {
             // Minecraft may log the entire command if an exception escapes its handler.
             LOGGER.warn("Не удалось сохранить настройки Telegram ({})", failure.getClass().getSimpleName());
@@ -206,12 +218,12 @@ public class TelegramNotificator {
 
     private CompletableFuture<String> send(String text) {
         String token = Config.TOKEN.get();
-        long chatId = Config.CHAT_ID.get();
-        if (token.isEmpty() || chatId == 0) {
+        Config.Destination destination = Config.destination();
+        if (token.isEmpty() || destination.chatId() == 0) {
             return null;
         }
 
-        return telegram.send(token, chatId, text).thenApply(error -> {
+        return telegram.send(token, destination, text).thenApply(error -> {
             if (error != null) {
                 LOGGER.warn("Не удалось отправить сообщение Telegram: {}", error);
             }

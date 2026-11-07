@@ -17,7 +17,8 @@ final class Config {
             "[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}:" + USERNAME);
 
     static final ModConfigSpec.ConfigValue<String> TOKEN = BUILDER.define("token", "");
-    static final ModConfigSpec.LongValue CHAT_ID = BUILDER.defineInRange("chatId", 0L, Long.MIN_VALUE, 0L);
+    private static final ModConfigSpec.LongValue CHAT_ID = BUILDER.defineInRange("chatId", 0L, Long.MIN_VALUE, 0L);
+    private static final ModConfigSpec.IntValue TOPIC_ID = BUILDER.defineInRange("topicId", 0, 0, Integer.MAX_VALUE);
     static final ModConfigSpec.IntValue REJOIN_SECONDS = BUILDER.defineInRange("rejoinSeconds", 300, 0, Integer.MAX_VALUE);
     static final ModConfigSpec.ConfigValue<List<? extends String>> BINDINGS = BUILDER.defineListAllowEmpty(
             "bindings", List.of(), null, value -> value instanceof String entry && BINDING.matcher(entry).matches());
@@ -36,7 +37,26 @@ final class Config {
         return bindings;
     }
 
-    static <T> void save(ModConfigSpec.ConfigValue<T> setting, T value) {
+    record Destination(long chatId, int topicId) {}
+
+    static synchronized Destination destination() {
+        return new Destination(CHAT_ID.get(), TOPIC_ID.get());
+    }
+
+    static synchronized void saveDestination(long chatId, int topicId) {
+        Destination previous = destination();
+        try {
+            CHAT_ID.set(chatId);
+            TOPIC_ID.set(topicId);
+            SPEC.save();
+        } catch (RuntimeException failure) {
+            CHAT_ID.set(previous.chatId());
+            TOPIC_ID.set(previous.topicId());
+            throw failure;
+        }
+    }
+
+    static synchronized <T> void save(ModConfigSpec.ConfigValue<T> setting, T value) {
         T previous = setting.get();
         setting.set(value);
         try {
