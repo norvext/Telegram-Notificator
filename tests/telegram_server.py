@@ -261,7 +261,7 @@ def run_checks(directory, telegram, options):
             assert replacement_token not in "".join(console.transcript)
 
 
-def main():
+def main(checks=run_checks):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="use only cached Gradle dependencies")
     options = ("--offline",) if parser.parse_args().offline else ()
@@ -270,7 +270,7 @@ def main():
         telegram.responses = queue.Queue()
         threading.Thread(target=telegram.serve_forever, daemon=True).start()
         try:
-            run_checks(Path(directory), telegram, options)
+            checks(Path(directory), telegram, options)
         finally:
             telegram.shutdown()
 

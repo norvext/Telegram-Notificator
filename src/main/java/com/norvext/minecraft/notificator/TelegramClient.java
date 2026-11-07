@@ -35,13 +35,16 @@ final class TelegramClient {
         return BOT_TOKEN.matcher(token).matches();
     }
 
-    CompletableFuture<String> send(String token, long chatId, String text) {
+    CompletableFuture<String> send(String token, Config.Destination destination, String text) {
         if (!validToken(token)) {
             return CompletableFuture.completedFuture("недопустимый формат токена");
         }
 
         JsonObject body = new JsonObject();
-        body.addProperty("chat_id", chatId);
+        body.addProperty("chat_id", destination.chatId());
+        if (destination.topicId() != 0) {
+            body.addProperty("message_thread_id", destination.topicId());
+        }
         body.addProperty("text", text);
         try {
             HttpRequest request = HttpRequest.newBuilder(apiBase.resolve("/bot" + token + "/sendMessage"))
@@ -53,7 +56,7 @@ final class TelegramClient {
             var delivery = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
             return delivery.copy().orTimeout(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).handle((response, failure) -> {
                 if (failure == null) {
-                    return responseError(response);
+                    return responseError(response, destination.topicId() != 0);
                 }
                 delivery.cancel(true);
                 return transportError(failure);
@@ -63,11 +66,13 @@ final class TelegramClient {
         }
     }
 
-    private static String responseError(HttpResponse<String> response) {
+    private static String responseError(HttpResponse<String> response, boolean hasTopic) {
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
             return switch (status) {
-                case 400 -> "HTTP 400: проверьте группу уведомлений";
+                case 400 -> hasTopic
+                        ? "HTTP 400: проверьте группу и тему уведомлений"
+                        : "HTTP 400: проверьте группу уведомлений";
                 case 401, 404 -> "HTTP " + status + ": проверьте токен";
                 case 403 -> "HTTP 403: проверьте доступ бота к группе";
                 case 429 -> "HTTP 429: превышен лимит запросов";
