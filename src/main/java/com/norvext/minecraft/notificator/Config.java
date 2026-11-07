@@ -9,6 +9,10 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 final class Config {
+    enum MentionPolicy {
+        ALL, OFFLINE, NONE
+    }
+
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
     private static final String USERNAME = "[a-zA-Z0-9_]{1,32}";
@@ -20,6 +24,8 @@ final class Config {
     static final ModConfigSpec.LongValue CHAT_ID = BUILDER.defineInRange("chatId", 0L, Long.MIN_VALUE, 0L);
     static final ModConfigSpec.ConfigValue<List<? extends String>> BINDINGS = BUILDER.defineListAllowEmpty(
             "bindings", List.of(), null, value -> value instanceof String entry && BINDING.matcher(entry).matches());
+    static final ModConfigSpec.EnumValue<MentionPolicy> MENTION_POLICY =
+            BUILDER.defineEnum("mentionPolicy", MentionPolicy.ALL);
     static final ModConfigSpec SPEC = BUILDER.build();
 
     static boolean validUsername(String username) {

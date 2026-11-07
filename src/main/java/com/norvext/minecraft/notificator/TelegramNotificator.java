@@ -20,6 +20,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import org.slf4j.Logger;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -43,6 +44,13 @@ public class TelegramNotificator {
 
     @SubscribeEvent
     public void registerCommands(RegisterCommandsEvent event) {
+        var mentions = literal("mentions").requires(TelegramNotificator::isAdmin);
+        for (var policy : Config.MentionPolicy.values()) {
+            String mode = policy.name().toLowerCase(Locale.ROOT);
+            mentions.then(literal(mode).executes(context -> saveSetting(context.getSource(),
+                    Config.MENTION_POLICY, policy, "Режим упоминаний сохранён: " + mode)));
+        }
+
         event.getDispatcher().register(literal("telegram")
                 .then(literal("link").requires(TelegramNotificator::isPlayer)
                         .then(argument("username", StringArgumentType.word())
@@ -62,6 +70,7 @@ public class TelegramNotificator {
                         .then(literal("set").then(argument("chat_id", LongArgumentType.longArg(Long.MIN_VALUE, -1))
                                 .executes(context -> saveSetting(context.getSource(), Config.CHAT_ID,
                                         LongArgumentType.getLong(context, "chat_id"), "Группа уведомлений сохранена")))))
+                .then(mentions)
                 .then(literal("test").requires(TelegramNotificator::isAdmin)
                         .executes(context -> sendTest(context.getSource()))));
     }
@@ -150,13 +159,23 @@ public class TelegramNotificator {
     @SubscribeEvent
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
-            String mentions = Config.bindings().entrySet().stream()
-                    .filter(entry -> !entry.getKey().equals(player.getUUID()))
-                    .map(entry -> "@" + entry.getValue())
-                    .collect(Collectors.joining(" "));
+            String mentions = mentionsFor(player);
             String message = player.getGameProfile().name() + " вошёл на сервер Minecraft";
             send(mentions.isEmpty() ? message : message + "\n" + mentions);
         }
+    }
+
+    private static String mentionsFor(ServerPlayer player) {
+        var policy = Config.MENTION_POLICY.get();
+        if (policy == Config.MentionPolicy.NONE) {
+            return "";
+        }
+        var players = player.level().getServer().getPlayerList();
+        return Config.bindings().entrySet().stream()
+                .filter(entry -> !entry.getKey().equals(player.getUUID()))
+                .filter(entry -> policy == Config.MentionPolicy.ALL || players.getPlayer(entry.getKey()) == null)
+                .map(entry -> "@" + entry.getValue())
+                .collect(Collectors.joining(" "));
     }
 
     private int sendTest(CommandSourceStack source) {
