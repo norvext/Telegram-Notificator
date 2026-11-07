@@ -238,10 +238,10 @@ def run_checks(directory, telegram, options):
         expect_message(telegram, replacement_token, replacement_chat, test_message)
 
         telegram.responses.put((200, b'{"ok":true}', 6))
-        with vanilla_player(console, "Alex"):
-            expect_message(telegram, replacement_token, replacement_chat, "Alex вошёл на сервер Minecraft")
+        with vanilla_player(console, "Steve"):
+            expect_message(telegram, replacement_token, replacement_chat, "Steve вошёл на сервер Minecraft")
             console.send("list")
-            console.wait_for("players online: Alex", timeout=2)
+            console.wait_for("players online: Steve", timeout=2)
             console.wait_for("истекло время ожидания", timeout=7)
             assert telegram.requests.empty()
 

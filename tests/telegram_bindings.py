@@ -45,6 +45,8 @@ def run_checks(directory, telegram, options):
             reply("Привязка сохранена")
 
         console.wait_for("Robin left the game")
+        console.send("telegram rejoin set 0")
+        console.wait_for("Интервал перезахода сохранён")
         with vanilla_player(console, "Robin"):
             expect_message(telegram, token, chat, "Robin вошёл на сервер Minecraft\n@steve_telegram")
 

@@ -1,5 +1,6 @@
 package com.norvext.minecraft.notificator;
 
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -18,6 +19,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
 
 import java.util.Locale;
@@ -36,6 +38,7 @@ public class TelegramNotificator {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     private final TelegramClient telegram = new TelegramClient();
+    private boolean stopping;
 
     public TelegramNotificator(ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.LOCAL, Config.SPEC);
@@ -68,8 +71,16 @@ public class TelegramNotificator {
                         .then(literal("remove").executes(context -> removeToken(context.getSource()))))
                 .then(literal("chat").requires(TelegramNotificator::isAdmin)
                         .then(literal("set").then(argument("chat_id", LongArgumentType.longArg(Long.MIN_VALUE, -1))
-                                .executes(context -> saveSetting(context.getSource(), Config.CHAT_ID,
-                                        LongArgumentType.getLong(context, "chat_id"), "Группа уведомлений сохранена")))))
+                                .executes(context -> setChat(context.getSource(),
+                                        LongArgumentType.getLong(context, "chat_id"), 0))
+                                .then(argument("topic_id", IntegerArgumentType.integer(1))
+                                        .executes(context -> setChat(context.getSource(),
+                                                LongArgumentType.getLong(context, "chat_id"),
+                                                IntegerArgumentType.getInteger(context, "topic_id")))))))
+                .then(literal("rejoin").requires(TelegramNotificator::isAdmin)
+                        .then(literal("set").then(argument("seconds", IntegerArgumentType.integer(0))
+                                .executes(context -> saveSetting(context.getSource(), Config.REJOIN_SECONDS,
+                                        IntegerArgumentType.getInteger(context, "seconds"), "Интервал перезахода сохранён")))))
                 .then(mentions)
                 .then(literal("test").requires(TelegramNotificator::isAdmin)
                         .executes(context -> sendTest(context.getSource()))));
@@ -142,10 +153,18 @@ public class TelegramNotificator {
         return saveSetting(source, Config.TOKEN, "", "Токен удалён");
     }
 
+    private static int setChat(CommandSourceStack source, long chatId, int topicId) {
+        return saveSetting(source, () -> Config.saveDestination(chatId, topicId), "Группа уведомлений сохранена");
+    }
+
     private static <T> int saveSetting(CommandSourceStack source, ModConfigSpec.ConfigValue<T> setting,
                                        T value, String success) {
+        return saveSetting(source, () -> Config.save(setting, value), success);
+    }
+
+    private static int saveSetting(CommandSourceStack source, Runnable save, String success) {
         try {
-            Config.save(setting, value);
+            save.run();
         } catch (RuntimeException failure) {
             // Minecraft may log the entire command if an exception escapes its handler.
             LOGGER.warn("Не удалось сохранить настройки Telegram ({})", failure.getClass().getSimpleName());
@@ -158,7 +177,9 @@ public class TelegramNotificator {
 
     @SubscribeEvent
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) {
+        if (event.getEntity() instanceof ServerPlayer player
+                && !PlayerLogouts.get(player.level().getServer()).suppressJoin(
+                        player.getUUID(), System.currentTimeMillis(), Config.REJOIN_SECONDS.get())) {
             String mentions = mentionsFor(player);
             String message = player.getGameProfile().name() + " вошёл на сервер Minecraft";
             send(mentions.isEmpty() ? message : message + "\n" + mentions);
@@ -176,6 +197,25 @@ public class TelegramNotificator {
                 .filter(entry -> policy == Config.MentionPolicy.ALL || players.getPlayer(entry.getKey()) == null)
                 .map(entry -> "@" + entry.getValue())
                 .collect(Collectors.joining(" "));
+    }
+
+    @SubscribeEvent
+    public void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (!stopping && event.getEntity() instanceof ServerPlayer player) {
+            PlayerLogouts.get(player.level().getServer()).record(player.getUUID(), System.currentTimeMillis());
+        }
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        // PlayerList removes online players after this event, producing further logout events.
+        stopping = true;
+        long stoppedAt = System.currentTimeMillis();
+        var server = event.getServer();
+        var logouts = PlayerLogouts.get(server);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            logouts.record(player.getUUID(), stoppedAt);
+        }
     }
 
     private int sendTest(CommandSourceStack source) {
@@ -197,12 +237,12 @@ public class TelegramNotificator {
 
     private CompletableFuture<String> send(String text) {
         String token = Config.TOKEN.get();
-        long chatId = Config.CHAT_ID.get();
-        if (token.isEmpty() || chatId == 0) {
+        Config.Destination destination = Config.destination();
+        if (token.isEmpty() || destination.chatId() == 0) {
             return null;
         }
 
-        return telegram.send(token, chatId, text).thenApply(error -> {
+        return telegram.send(token, destination, text).thenApply(error -> {
             if (error != null) {
                 LOGGER.warn("Не удалось отправить сообщение Telegram: {}", error);
             }
