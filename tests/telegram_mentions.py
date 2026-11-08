@@ -71,6 +71,7 @@ def run_checks(directory, telegram, options):
                 expect_message(telegram, token, chat, "Dwight вошёл на сервер Minecraft\n@steve_telegram")
 
     with dedicated_server(directory, telegram.server_port, options) as console:
+        expect_message(telegram, token, chat, "Сервер Minecraft запущен\n@alex_telegram @steve_telegram")
         with vanilla_player(console, "Donna") as (command, reply):
             expect_message(telegram, token, chat, "Donna вошёл на сервер Minecraft\n@alex_telegram @steve_telegram")
             command("telegram link donna_telegram")

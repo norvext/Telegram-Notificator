@@ -1,5 +1,6 @@
 package com.norvext.minecraft.notificator;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
@@ -40,7 +41,7 @@ final class TelegramClient {
         return BOT_TOKEN.matcher(token).matches();
     }
 
-    CompletableFuture<Optional<String>> send(String token, Config.Destination destination, String text) {
+    CompletableFuture<Optional<String>> send(String token, Config.Destination destination, TelegramMessage message) {
         if (!validToken(token)) {
             return CompletableFuture.completedFuture(Optional.of("недопустимый формат токена"));
         }
@@ -50,7 +51,18 @@ final class TelegramClient {
         if (destination.topicId() != 0) {
             body.addProperty("message_thread_id", destination.topicId());
         }
-        body.addProperty("text", text);
+        body.addProperty("text", message.text());
+        if (!message.entities().isEmpty()) {
+            var entities = new JsonArray();
+            for (var entity : message.entities()) {
+                var json = new JsonObject();
+                json.addProperty("type", entity.type());
+                json.addProperty("offset", entity.offset());
+                json.addProperty("length", entity.length());
+                entities.add(json);
+            }
+            body.add("entities", entities);
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder(apiBase.resolve("/bot" + token + "/sendMessage"))
                     .timeout(TIMEOUT)

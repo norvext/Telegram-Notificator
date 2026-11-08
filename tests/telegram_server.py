@@ -232,6 +232,7 @@ def run_checks(directory, telegram, options):
         assert replacement_token not in "".join(console.transcript)
 
     with dedicated_server(directory, telegram.server_port, options) as console:
+        expect_message(telegram, replacement_token, replacement_chat, "Сервер Minecraft запущен")
         telegram.responses.put((401, replacement_token.encode(), 0))
         console.send("telegram test")
         console.wait_for("Пробное сообщение не отправлено: HTTP 401")

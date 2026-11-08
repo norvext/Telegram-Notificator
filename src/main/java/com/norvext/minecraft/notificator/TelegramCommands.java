@@ -1,5 +1,6 @@
 package com.norvext.minecraft.notificator;
 
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -70,6 +71,12 @@ final class TelegramCommands {
                                         () -> config.saveRejoinSeconds(IntegerArgumentType.getInteger(context, "seconds")),
                                         "Интервал перезахода сохранён")))))
                 .then(mentions)
+                .then(literal("startup").requires(TelegramCommands::isAdmin)
+                        .then(argument("enabled", BoolArgumentType.bool())
+                                .executes(context -> setStartup(context.getSource(),
+                                        BoolArgumentType.getBool(context, "enabled")))))
+                .then(literal("reload").requires(TelegramCommands::isAdmin)
+                        .executes(context -> reload(context.getSource())))
                 .then(literal("test").requires(TelegramCommands::isAdmin)
                         .executes(context -> sendTest(context.getSource()))));
     }
@@ -143,6 +150,25 @@ final class TelegramCommands {
         return saveSetting(source, () -> config.saveDestination(chatId, topicId), "Группа уведомлений сохранена");
     }
 
+    private int setStartup(CommandSourceStack source, boolean enabled) {
+        return saveSetting(source, () -> config.saveNotifyOnStartup(enabled),
+                enabled ? "Уведомление о запуске включено" : "Уведомление о запуске выключено");
+    }
+
+    private int reload(CommandSourceStack source) {
+        try {
+            config.reload();
+        } catch (IllegalArgumentException failure) {
+            source.sendFailure(Component.literal("Настройки Telegram не обновлены: " + failure.getMessage()));
+            return 0;
+        } catch (IOException failure) {
+            source.sendFailure(Component.literal("Не удалось прочитать настройки Telegram"));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Настройки Telegram перечитаны"), false);
+        return 1;
+    }
+
     @FunctionalInterface
     private interface SaveSetting {
         void run() throws IOException;
@@ -154,7 +180,8 @@ final class TelegramCommands {
         } catch (IOException | RuntimeException failure) {
             // Minecraft may log the entire command if an exception escapes its handler.
             LOGGER.warn("Не удалось сохранить настройки Telegram ({})", failure.getClass().getSimpleName());
-            source.sendFailure(Component.literal("Не удалось сохранить настройки Telegram"));
+            source.sendFailure(Component.literal(
+                    "Не удалось сохранить настройки Telegram. Проверьте файл и выполните /telegram reload"));
             return 0;
         }
         source.sendSuccess(() -> Component.literal(success), false);

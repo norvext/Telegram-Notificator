@@ -59,6 +59,7 @@ def run_checks(directory, telegram, options):
             reply("Группа уведомлений сохранена")
 
     with dedicated_server(directory, telegram.server_port, options) as console:
+        expect_topic_message(telegram, OPERATOR_TOPIC, "Сервер Minecraft запущен")
         console.send("telegram test")
         console.wait_for("Пробное сообщение отправлено")
         expect_topic_message(telegram, OPERATOR_TOPIC, TEST_MESSAGE)

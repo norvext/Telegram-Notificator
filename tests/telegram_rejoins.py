@@ -4,7 +4,7 @@ from contextlib import ExitStack
 import queue
 import time
 
-from telegram_server import dedicated_server, main, vanilla_player
+from telegram_server import dedicated_server, expect_message, main, vanilla_player
 
 
 def expect_join(telegram, name):
@@ -44,6 +44,7 @@ def run_checks(directory, telegram, options):
             assert console.process.wait(timeout=15) == 0
 
     with dedicated_server(directory, telegram.server_port, options) as console:
+        expect_message(telegram, "123:integration_test", -1001234567890, "Сервер Minecraft запущен")
         for name in ("Alex", "Steve", "Casey"):
             with vanilla_player(console, name):
                 expect_no_join(telegram)
@@ -72,6 +73,7 @@ def run_checks(directory, telegram, options):
             expect_join(telegram, "Alex")
 
     with dedicated_server(directory, telegram.server_port, options) as console:
+        expect_message(telegram, "123:integration_test", -1001234567890, "Сервер Minecraft запущен")
         with vanilla_player(console, "Alex"):
             expect_join(telegram, "Alex")
 
