@@ -1,14 +1,11 @@
-<p align="center">
-  <img src=".github/assets/TelegramNotificator-icon.png" alt="Иконка Telegram Notificator" width="128">
-</p>
-
-# Telegram Notificator
-
-**Автор** norvext · **Minecraft** 26.3 · **NeoForge** 26.3.0.101 · **Язык** Java 25
-
-[English documentation](docs/README.en.md)
-
-Мод отправляет уведомления о входе игроков и запуске сервера в группу или тему Telegram. Игроки могут привязать свой Telegram username, чтобы бот упоминал их в уведомлениях.
+<div align="center">
+  <br>
+  <img src=".github/assets/TelegramNotificator-icon.png" alt="Иконка Telegram Notificator" width="256">
+  <h1>Telegram Notificator</h1>
+  <p><strong>Версия мода</strong> 1.1 · <strong>Автор</strong> norvext · <strong>Minecraft</strong> 26.3 · <strong>NeoForge</strong> 26.3.0.101 · <strong>Язык</strong> Java 25</p>
+  <p><a href="docs/README.en.md">English documentation</a></p>
+  <p>Мод отправляет уведомления о входе игроков и запуске сервера в группу или тему Telegram. Игроки могут привязать свой Telegram username, чтобы бот упоминал их в уведомлениях.</p>
+</div>
 
 ## Совместимость
 

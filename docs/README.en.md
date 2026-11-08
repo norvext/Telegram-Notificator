@@ -1,14 +1,11 @@
-<p align="center">
-  <img src="../.github/assets/TelegramNotificator-icon.png" alt="Telegram Notificator icon" width="128">
-</p>
-
-# Telegram Notificator
-
-**Author** norvext · **Minecraft** 26.3 · **NeoForge** 26.3.0.101 · **Language** Java 25
-
-[Документация на русском](../README.md)
-
-The mod sends player join and server startup notifications to a Telegram group or topic. Players can link their Telegram usernames so the bot can mention them in notifications.
+<div align="center">
+  <br>
+  <img src="../.github/assets/TelegramNotificator-icon.png" alt="Telegram Notificator icon" width="256">
+  <h1>Telegram Notificator</h1>
+  <p><strong>Mod version</strong> 1.1 · <strong>Author</strong> norvext · <strong>Minecraft</strong> 26.3 · <strong>NeoForge</strong> 26.3.0.101 · <strong>Language</strong> Java 25</p>
+  <p><a href="../README.md">Документация на русском</a></p>
+  <p>The mod sends player join and server startup notifications to a Telegram group or topic. Players can link their Telegram usernames so the bot can mention them in notifications.</p>
+</div>
 
 ## Compatibility
 
