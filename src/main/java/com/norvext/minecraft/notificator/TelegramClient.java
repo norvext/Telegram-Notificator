@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
+import com.norvext.minecraft.notificator.core.TelegramMessage;
 import net.neoforged.fml.loading.FMLEnvironment;
 
 import java.net.URI;
@@ -20,7 +22,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
 final class TelegramClient {
-    static final int MAX_TEXT_LENGTH = 4096;
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
     private static final Pattern BOT_TOKEN = Pattern.compile("[0-9]+:[a-zA-Z0-9_-]+");
     private static final URI API = URI.create("https://api.telegram.org");
@@ -33,7 +34,7 @@ final class TelegramClient {
 
     TelegramClient() {
         // Allow an integration server to exercise HTTP locally.
-        String localApi = FMLEnvironment.isProduction() ? "" : System.getProperty("telegramnotificator.apiBase", "");
+        String localApi = FMLEnvironment.production ? "" : System.getProperty("telegramnotificator.apiBase", "");
         apiBase = localApi.matches("http://127\\.0\\.0\\.1:[0-9]{1,5}") ? URI.create(localApi) : API;
     }
 
@@ -73,7 +74,7 @@ final class TelegramClient {
             var delivery = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
             return delivery.copy().orTimeout(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).handle((response, failure) -> {
                 if (failure == null) {
-                    return responseError(response, destination.topicId() != 0);
+                    return responseError(response, destination.topicId() != 0, token);
                 }
                 delivery.cancel(true);
                 return Optional.of(transportError(failure));
@@ -83,7 +84,15 @@ final class TelegramClient {
         }
     }
 
-    private static Optional<String> responseError(HttpResponse<String> response, boolean hasTopic) {
+    private static Optional<String> responseError(HttpResponse<String> response, boolean hasTopic, String token) {
+        JsonObject body = null;
+        try {
+            if (JsonParser.parseString(response.body()) instanceof JsonObject parsed) {
+                body = parsed;
+            }
+        } catch (JsonParseException ignored) {
+            // The raw response is never reported: it may contain credentials or user data.
+        }
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
             return Optional.of(switch (status) {
@@ -94,18 +103,27 @@ final class TelegramClient {
                 case 403 -> "HTTP 403: проверьте доступ бота к группе";
                 case 429 -> "HTTP 429: превышен лимит запросов";
                 default -> "HTTP " + status;
-            });
+            } + description(body, token));
         }
-        try {
-            if (JsonParser.parseString(response.body()) instanceof JsonObject body
-                    && body.get("ok") != null && body.get("ok").isJsonPrimitive()
-                    && body.get("ok").getAsJsonPrimitive().isBoolean()) {
-                return body.get("ok").getAsBoolean() ? Optional.empty() : Optional.of("Telegram отклонил запрос");
-            }
-        } catch (JsonParseException ignored) {
-            // Telegram responses may contain credentials or user data.
+        if (body != null && body.get("ok") != null && body.get("ok").isJsonPrimitive()
+                && body.get("ok").getAsJsonPrimitive().isBoolean()) {
+            return body.get("ok").getAsBoolean()
+                    ? Optional.empty()
+                    : Optional.of("Telegram отклонил запрос" + description(body, token));
         }
         return Optional.of("некорректный ответ Telegram");
+    }
+
+    // Telegram explains a rejection in "description", e.g. "Bad Request: chat not found".
+    private static String description(JsonObject body, String token) {
+        if (body == null || !(body.get("description") instanceof JsonPrimitive value) || !value.isString()) {
+            return "";
+        }
+        String text = value.getAsString().replaceAll("\\p{Cntrl}", " ").strip();
+        if (text.isEmpty() || text.contains(token)) {
+            return "";
+        }
+        return " (" + (text.length() > 200 ? text.substring(0, 200) + "…" : text) + ")";
     }
 
     private static String transportError(Throwable failure) {

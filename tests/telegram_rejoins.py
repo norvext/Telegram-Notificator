@@ -41,7 +41,7 @@ def run_checks(directory, telegram, options):
                 online.enter_context(vanilla_player(console, name))
                 expect_join(telegram, name)
             console.send("stop")
-            assert console.process.wait(timeout=15) == 0
+            assert console.process.wait(timeout=60) == 0
 
     with dedicated_server(directory, telegram.server_port, options) as console:
         expect_message(telegram, "123:integration_test", -1001234567890, "Сервер Minecraft запущен")

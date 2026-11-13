@@ -16,6 +16,7 @@ public class TelegramNotificator {
         events.addListener(commands::registerCommands);
         events.addListener(notifications::onPlayerLoggedIn);
         events.addListener(notifications::onPlayerLoggedOut);
+        events.addListener(notifications::onServerTick);
         events.addListener(notifications::onServerStarted);
         events.addListener(notifications::onServerStopping);
     }

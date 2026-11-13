@@ -53,7 +53,8 @@ def expect_styled(telegram, text, *styles):
 def run_checks(directory, telegram, options):
     config = directory / "config" / "telegramnotificator-local.toml"
     config.parent.mkdir()
-    config.write_text(config_text(NAME, "none"), encoding="utf-8")
+    # The first file imitates one edited on Windows: CRLF must not leak into messages.
+    config.write_text(config_text(NAME, "none"), encoding="utf-8", newline="\r\n")
 
     with dedicated_server(directory, telegram.server_port, options) as console:
         expect_styled(telegram, f"🧭 {NAME}\nПора играть (@alex_telegram)", ("bold", NAME))
@@ -73,7 +74,7 @@ def run_checks(directory, telegram, options):
             command("telegram startup false")
             reply("command.context.here")
 
-        config.write_text(config_text("Second server", "all"), encoding="utf-8")
+        config.write_text(config_text("Second server", "all"), encoding="utf-8", newline="\n")
         console.send("telegram startup false")
         console.wait_for("Не удалось сохранить настройки Telegram. Проверьте файл")
         assert 'serverName = "Second server"' in config.read_text(encoding="utf-8")
@@ -85,10 +86,10 @@ def run_checks(directory, telegram, options):
                           ("bold", "Robin"), ("code", "Second server"), ("italic", "Готовы?"))
 
         valid = config.read_text(encoding="utf-8")
-        config.write_text(valid.replace("notifyOnStartup = true", 'notifyOnStartup = "false"'), encoding="utf-8")
+        config.write_text(valid.replace("notifyOnStartup = true", 'notifyOnStartup = "false"'), encoding="utf-8", newline="\n")
         console.send("telegram reload")
         console.wait_for("Настройки Telegram не обновлены: notifyOnStartup")
-        config.write_text("serverName = '''unfinished", encoding="utf-8")
+        config.write_text("serverName = '''unfinished", encoding="utf-8", newline="\n")
         console.send("telegram reload")
         console.wait_for("Не удалось прочитать настройки Telegram")
         console.send("telegram test")
@@ -96,7 +97,7 @@ def run_checks(directory, telegram, options):
                       ("underline", "Проверка"), ("strikethrough", "тест"), ("pre", "Second server"))
         console.wait_for("Пробное сообщение отправлено")
 
-        config.write_text(valid, encoding="utf-8")
+        config.write_text(valid, encoding="utf-8", newline="\n")
         console.send("telegram startup false")
         console.wait_for("Уведомление о запуске выключено")
         assert "notifyOnStartup = false" in config.read_text(encoding="utf-8")

@@ -1,16 +1,21 @@
 package com.norvext.minecraft.notificator;
 
 import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.core.io.NewlineStyle;
+import com.electronwill.nightconfig.core.io.ParsingMode;
 import com.electronwill.nightconfig.toml.TomlFormat;
 import com.electronwill.nightconfig.toml.TomlParser;
 import com.electronwill.nightconfig.toml.TomlWriter;
 import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Objects;
 
 final class TelegramSettingsFile {
@@ -18,10 +23,29 @@ final class TelegramSettingsFile {
 
     private final Path file = FMLPaths.CONFIGDIR.get().resolve(TelegramNotificator.MODID + "-local.toml");
 
+    // Insertion order keeps a hand-edited file stable across rewrites.
+    static CommentedConfig newSettings() {
+        return TomlFormat.newConfig(LinkedHashMap::new);
+    }
+
+    static CommentedConfig copy(CommentedConfig settings) {
+        var copy = CommentedConfig.copy(settings, LinkedHashMap::new);
+        // The ordered copy does not carry comments over.
+        settings.commentMap().forEach((key, comment) -> copy.setComment(List.of(key), comment));
+        return copy;
+    }
+
+    Path path() {
+        return file;
+    }
+
     Contents read() throws IOException {
         String source = readSource();
         try {
-            var settings = source == null ? TomlFormat.newConfig() : new TomlParser().parse(source);
+            var settings = newSettings();
+            if (source != null) {
+                new TomlParser().parse(new StringReader(source), settings, ParsingMode.REPLACE);
+            }
             return new Contents(settings, source);
         } catch (RuntimeException failure) {
             throw new IOException("Не удалось разобрать TOML", failure);
@@ -33,6 +57,8 @@ final class TelegramSettingsFile {
             throw new IOException("Настройки изменились на диске");
         }
         var writer = new TomlWriter();
+        // A platform line separator would end up inside multi-line template strings.
+        writer.setNewline(NewlineStyle.UNIX);
         writer.setWriteStringMultilinePredicate(value -> value.indexOf('\n') >= 0);
         String text = writer.writeToString(updated);
         Files.createDirectories(file.getParent());

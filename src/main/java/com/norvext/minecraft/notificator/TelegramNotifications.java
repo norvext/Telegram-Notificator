@@ -1,22 +1,33 @@
 package com.norvext.minecraft.notificator;
 
 import com.mojang.logging.LogUtils;
+import com.norvext.minecraft.notificator.core.MessageTemplate;
+import com.norvext.minecraft.notificator.core.RejoinFilter;
+import com.norvext.minecraft.notificator.core.TelegramMessage;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 final class TelegramNotifications {
     private static final Logger LOGGER = LogUtils.getLogger();
 
+    private record PendingLeave(String playerName, long dueAt) {}
+
     private final Config config;
     private final TelegramClient telegram = new TelegramClient();
+    // A leave is announced only after the rejoin interval, so a quick rejoin produces no messages at all.
+    private final Map<UUID, PendingLeave> pendingLeaves = new HashMap<>();
     private boolean stopping;
 
     TelegramNotifications(Config config) {
@@ -24,46 +35,78 @@ final class TelegramNotifications {
     }
 
     void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player
-                && !PlayerLogouts.get(player.level().getServer()).suppressJoin(
-                        player.getUUID(), System.currentTimeMillis(), config.rejoinSeconds())
-                && isConfigured()) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        MinecraftServer server = player.server;
+        if (PlayerLogouts.get(server).suppressJoin(player.getUUID(), System.currentTimeMillis(), config.rejoinSeconds())) {
+            pendingLeaves.remove(player.getUUID());
+            return;
+        }
+        PendingLeave left = pendingLeaves.remove(player.getUUID());
+        if (left != null) {
+            // The player is already counted as online again; the earlier leave happened without them.
+            announceLeave(server, left, server.getPlayerCount() - 1);
+        }
+        if (config.isConfigured()) {
             var settings = config.notifications();
-            send("вход игрока", settings.join().render(settings.serverName(),
-                    player.getGameProfile().name(), recipients(player)));
+            var players = server.getPlayerList();
+            send("вход игрока", settings.join().render(
+                    values(server, player.getGameProfile().getName(), server.getPlayerCount()),
+                    config.mentionPolicy().recipients(config.bindings(), player.getUUID(),
+                            other -> players.getPlayer(other) != null)));
+        }
+    }
+
+    void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (stopping || !(event.getEntity() instanceof ServerPlayer player)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        PlayerLogouts.get(player.server).record(player.getUUID(), now);
+        if (config.notifications().notifyOnLeave()) {
+            pendingLeaves.put(player.getUUID(), new PendingLeave(player.getGameProfile().getName(),
+                    RejoinFilter.quietUntil(now, config.rejoinSeconds())));
+        }
+    }
+
+    void onServerTick(ServerTickEvent.Post event) {
+        if (pendingLeaves.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        MinecraftServer server = event.getServer();
+        pendingLeaves.values().removeIf(left -> {
+            if (now < left.dueAt()) {
+                return false;
+            }
+            announceLeave(server, left, server.getPlayerCount());
+            return true;
+        });
+    }
+
+    private void announceLeave(MinecraftServer server, PendingLeave left, int online) {
+        var settings = config.notifications();
+        if (settings.notifyOnLeave() && config.isConfigured()) {
+            send("выход игрока", settings.leave().render(values(server, left.playerName(), online)));
         }
     }
 
     void onServerStarted(ServerStartedEvent event) {
         var settings = config.notifications();
-        if (settings.notifyOnStartup() && isConfigured()) {
-            send("запуск сервера", settings.startup().render(settings.serverName(), "",
+        if (!config.isConfigured()) {
+            LOGGER.info("Telegram Notificator не настроен. Выполните в консоли: telegram token set <токен>, "
+                    + "затем telegram chat set <chat_id> [topic_id]");
+        } else if (settings.notifyOnStartup()) {
+            send("запуск сервера", settings.startup().render(values(event.getServer(), "", 0),
                     List.copyOf(config.bindings().values())));
-        }
-    }
-
-    private List<String> recipients(ServerPlayer player) {
-        var policy = config.mentionPolicy();
-        if (policy == Config.MentionPolicy.NONE) {
-            return List.of();
-        }
-        var players = player.level().getServer().getPlayerList();
-        return config.bindings().entrySet().stream()
-                .filter(entry -> !entry.getKey().equals(player.getUUID()))
-                .filter(entry -> policy == Config.MentionPolicy.ALL || players.getPlayer(entry.getKey()) == null)
-                .map(Map.Entry::getValue)
-                .toList();
-    }
-
-    void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
-        if (!stopping && event.getEntity() instanceof ServerPlayer player) {
-            PlayerLogouts.get(player.level().getServer()).record(player.getUUID(), System.currentTimeMillis());
         }
     }
 
     void onServerStopping(ServerStoppingEvent event) {
         // PlayerList removes online players after this event, producing further logout events.
         stopping = true;
+        pendingLeaves.clear();
         long stoppedAt = System.currentTimeMillis();
         var server = event.getServer();
         var logouts = PlayerLogouts.get(server);
@@ -72,13 +115,13 @@ final class TelegramNotifications {
         }
     }
 
-    CompletableFuture<Optional<String>> sendTest() {
-        var settings = config.notifications();
-        return send("проверка", settings.test().render(settings.serverName(), "", List.of()));
+    CompletableFuture<Optional<String>> sendTest(MinecraftServer server) {
+        return send("проверка", config.notifications().test().render(values(server, "", server.getPlayerCount())));
     }
 
-    boolean isConfigured() {
-        return !config.token().isEmpty() && config.destination().chatId() != 0;
+    private MessageTemplate.Values values(MinecraftServer server, String playerName, int online) {
+        return new MessageTemplate.Values(config.notifications().serverName(), playerName,
+                Math.max(online, 0), server.getMaxPlayers());
     }
 
     private CompletableFuture<Optional<String>> send(String event, List<TelegramMessage> messages) {

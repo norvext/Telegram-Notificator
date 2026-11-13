@@ -1,4 +1,4 @@
-package com.norvext.minecraft.notificator;
+package com.norvext.minecraft.notificator.core;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -6,9 +6,16 @@ import java.util.StringJoiner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-final class MessageTemplate {
+public final class MessageTemplate {
+    /** Data substituted into a template; {@code playerName} is empty for events without a player. */
+    public record Values(String serverName, String playerName, int online, int maxPlayers) {
+        public Values(String serverName, int online, int maxPlayers) {
+            this(serverName, "", online, maxPlayers);
+        }
+    }
+
     private static final String TAGS = "<TgTags>";
-    private static final Pattern VALUES = Pattern.compile("<ServerName>|<PlayerName>");
+    private static final Pattern VALUES = Pattern.compile("<ServerName>|<PlayerName>|<Online>|<MaxPlayers>");
     private static final Pattern STYLES = Pattern.compile(
             "```([\\s\\S]*?)```|`([^`\\n]+)`|\\*\\*([^\\n]+?)\\*\\*"
                     + "|(?<![\\p{L}\\p{N}_])_([^_\\n]+)_(?![\\p{L}\\p{N}_])"
@@ -22,7 +29,7 @@ final class MessageTemplate {
     private final String afterTags;
     private final boolean hasTags;
 
-    MessageTemplate(String source, boolean allowsPlayer, boolean allowsTags, String serverName) {
+    public MessageTemplate(String source, boolean allowsPlayer, boolean allowsTags, String serverName) {
         int tags = source.indexOf(TAGS);
         if (source.length() > 16384 || (!allowsPlayer && source.contains("<PlayerName>"))
                 || (tags >= 0 && (!allowsTags || source.indexOf(TAGS, tags + TAGS.length()) >= 0))) {
@@ -39,22 +46,26 @@ final class MessageTemplate {
         hasTags = tags >= 0;
         beforeTags = hasTags ? source.substring(0, tags) : source;
         afterTags = hasTags ? source.substring(tags + TAGS.length()) : "";
-        String sample = format(withoutTags(), serverName, "0123456789abcdef").text();
-        if (sample.isBlank() || sample.length() > TelegramClient.MAX_TEXT_LENGTH) {
+        String sample = format(withoutTags(), new Values(serverName, "0123456789abcdef", 9999, 9999)).text();
+        if (sample.isBlank() || sample.length() > TelegramMessage.MAX_LENGTH) {
             throw new IllegalArgumentException("Сообщение должно содержать от 1 до 4096 символов");
         }
     }
 
-    List<TelegramMessage> render(String serverName, String playerName, List<String> usernames) {
+    public List<TelegramMessage> render(Values values) {
+        return render(values, List.of());
+    }
+
+    public List<TelegramMessage> render(Values values, List<String> usernames) {
         if (!hasTags || usernames.isEmpty()) {
-            return List.of(format(withoutTags(), serverName, playerName));
+            return List.of(format(withoutTags(), values));
         }
 
-        var before = format(beforeTags.stripLeading(), serverName, playerName);
-        var after = format(afterTags.stripTrailing(), serverName, playerName);
+        var before = format(beforeTags.stripLeading(), values);
+        var after = format(afterTags.stripTrailing(), values);
         String leftSpace = WORD_AT_END.matcher(before.text()).find() ? " " : "";
         String rightSpace = WORD_AT_START.matcher(after.text()).find() ? " " : "";
-        int available = TelegramClient.MAX_TEXT_LENGTH
+        int available = TelegramMessage.MAX_LENGTH
                 - before.text().length() - after.text().length() - leftSpace.length() - rightSpace.length();
         var mentions = new StringJoiner(" ");
         var messages = new ArrayList<TelegramMessage>();
@@ -63,12 +74,12 @@ final class MessageTemplate {
             if (length > available) {
                 if (messages.isEmpty()) {
                     messages.add(mentions.length() == 0
-                            ? format(withoutTags(), serverName, playerName)
+                            ? format(withoutTags(), values)
                             : combine(before, leftSpace + mentions + rightSpace, after));
                 } else {
                     messages.add(new TelegramMessage(mentions.toString()));
                 }
-                available = TelegramClient.MAX_TEXT_LENGTH;
+                available = TelegramMessage.MAX_LENGTH;
                 mentions = new StringJoiner(" ");
             }
             mentions.add("@" + username);
@@ -99,16 +110,16 @@ final class MessageTemplate {
         return (beforeTags + (separatesWords ? " " : "") + afterTags).strip();
     }
 
-    private static TelegramMessage format(String source, String serverName, String playerName) {
+    private static TelegramMessage format(String source, Values values) {
         var text = new StringBuilder();
         var entities = new ArrayList<TelegramMessage.Entity>();
         var styles = STYLES.matcher(source);
         int position = 0;
         while (styles.find()) {
-            text.append(substitute(source.substring(position, styles.start()), serverName, playerName));
+            text.append(substitute(source.substring(position, styles.start()), values));
             for (int group = 1; group <= styles.groupCount(); group++) {
                 if (styles.group(group) != null) {
-                    String styled = substitute(styles.group(group), serverName, playerName);
+                    String styled = substitute(styles.group(group), values);
                     if (group == 1) {
                         styled = styled.replaceFirst("^\\n", "").replaceFirst("\\n\\z", "");
                     }
@@ -121,12 +132,16 @@ final class MessageTemplate {
             }
             position = styles.end();
         }
-        text.append(substitute(source.substring(position), serverName, playerName));
+        text.append(substitute(source.substring(position), values));
         return new TelegramMessage(text.toString(), List.copyOf(entities));
     }
 
-    private static String substitute(String source, String serverName, String playerName) {
-        return VALUES.matcher(source).replaceAll(match -> Matcher.quoteReplacement(
-                match.group().equals("<ServerName>") ? serverName : playerName));
+    private static String substitute(String source, Values values) {
+        return VALUES.matcher(source).replaceAll(match -> Matcher.quoteReplacement(switch (match.group()) {
+            case "<ServerName>" -> values.serverName();
+            case "<PlayerName>" -> values.playerName();
+            case "<Online>" -> Integer.toString(values.online());
+            default -> Integer.toString(values.maxPlayers());
+        }));
     }
 }

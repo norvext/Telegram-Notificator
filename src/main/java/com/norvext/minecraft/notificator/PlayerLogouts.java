@@ -1,42 +1,45 @@
 package com.norvext.minecraft.notificator;
 
-import com.mojang.serialization.Codec;
-import net.minecraft.core.UUIDUtil;
-import net.minecraft.resources.Identifier;
+import com.norvext.minecraft.notificator.core.RejoinFilter;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.saveddata.SavedData;
-import net.minecraft.world.level.saveddata.SavedDataType;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 final class PlayerLogouts extends SavedData {
-    private static final SavedDataType<PlayerLogouts> TYPE = new SavedDataType<>(
-            Identifier.fromNamespaceAndPath(TelegramNotificator.MODID, "player_logouts"),
-            PlayerLogouts::new,
-            Codec.unboundedMap(UUIDUtil.STRING_CODEC, Codec.LONG)
-                    .xmap(PlayerLogouts::new, logouts -> logouts.lastLogout));
+    private static final String NAME = TelegramNotificator.MODID + "_player_logouts";
+    private static final Factory<PlayerLogouts> FACTORY = new Factory<>(PlayerLogouts::new, PlayerLogouts::load);
 
-    private final Map<UUID, Long> lastLogout;
-
-    PlayerLogouts() {
-        this(Map.of());
-    }
-
-    private PlayerLogouts(Map<UUID, Long> lastLogout) {
-        this.lastLogout = new HashMap<>(lastLogout);
-    }
+    private final Map<UUID, Long> lastLogout = new HashMap<>();
 
     static PlayerLogouts get(MinecraftServer server) {
-        return server.getDataStorage().computeIfAbsent(TYPE);
+        return server.overworld().getDataStorage().computeIfAbsent(FACTORY, NAME);
+    }
+
+    private static PlayerLogouts load(CompoundTag tag, HolderLookup.Provider registries) {
+        var logouts = new PlayerLogouts();
+        for (String key : tag.getAllKeys()) {
+            try {
+                logouts.lastLogout.put(UUID.fromString(key), tag.getLong(key));
+            } catch (IllegalArgumentException ignored) {
+                // Skip an entry that is not keyed by a player UUID.
+            }
+        }
+        return logouts;
+    }
+
+    @Override
+    public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
+        lastLogout.forEach((player, loggedOutAt) -> tag.putLong(player.toString(), loggedOutAt));
+        return tag;
     }
 
     boolean suppressJoin(UUID player, long joinedAt, int intervalSeconds) {
-        Long last = lastLogout.get(player);
-        return intervalSeconds > 0 && last != null
-                && joinedAt - last < TimeUnit.SECONDS.toMillis(intervalSeconds);
+        return RejoinFilter.suppresses(lastLogout.get(player), joinedAt, intervalSeconds);
     }
 
     void record(UUID player, long loggedOutAt) {

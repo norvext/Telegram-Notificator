@@ -10,6 +10,7 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -17,6 +18,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parent.parent
+WINDOWS = sys.platform == "win32"
 
 
 class TelegramStub(BaseHTTPRequestHandler):
@@ -32,7 +34,7 @@ class TelegramStub(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(response)
-        except BrokenPipeError:
+        except ConnectionError:
             pass
 
     def log_message(self, *_args):
@@ -73,17 +75,6 @@ class Console:
 
 @contextlib.contextmanager
 def dedicated_server(directory, api_port, gradle_options=()):
-    init = directory / "test.init.gradle"
-    init.write_text("""
-gradle.projectsEvaluated {
-    rootProject.tasks.named('runServer', JavaExec).configure {
-        workingDir project.file(System.getenv('TELEGRAM_TEST_DIRECTORY'))
-        standardInput = System.in
-        systemProperty 'telegramnotificator.apiBase', System.getenv('TELEGRAM_TEST_API')
-        systemProperty 'forge.logging.console.level', 'info'
-    }
-}
-""")
     with socket.socket() as port:
         port.bind(("127.0.0.1", 0))
         minecraft_port = port.getsockname()[1]
@@ -93,13 +84,22 @@ gradle.projectsEvaluated {
         "network-compression-threshold=-1\npause-when-empty-seconds=0\n"
         "level-type=minecraft:flat\ngenerate-structures=false\nop-permission-level=1\n"
     )
+    # build.gradle points runServer at this directory and at the Telegram stub through these variables.
+    environment = {**os.environ, "TELEGRAM_TEST_DIRECTORY": str(directory),
+                   "TELEGRAM_TEST_API": f"http://127.0.0.1:{api_port}"}
+    if WINDOWS:
+        # Piped JVM output defaults to the legacy code page, which would garble the Russian replies.
+        environment["JAVA_TOOL_OPTIONS"] = "-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8"
+        launcher = ["cmd", "/c", str(ROOT / "gradlew.bat")]
+        isolation = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        launcher = ["./gradlew"]
+        isolation = {"start_new_session": True}
     process = subprocess.Popen(
-        ["./gradlew", *gradle_options, "--console=plain", "--no-daemon", "--no-configuration-cache", "-I", str(init), "runServer"],
-        cwd=ROOT,
-        env={**os.environ, "TELEGRAM_TEST_DIRECTORY": str(directory),
-             "TELEGRAM_TEST_API": f"http://127.0.0.1:{api_port}"},
+        [*launcher, *gradle_options, "--console=plain", "--no-daemon", "--no-configuration-cache", "runServer"],
+        cwd=ROOT, env=environment,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", start_new_session=True,
+        text=True, encoding="utf-8", errors="replace", **isolation,
     )
     console = Console(process, minecraft_port)
     try:
@@ -109,11 +109,18 @@ gradle.projectsEvaluated {
         if process.poll() is None:
             try:
                 console.send("stop")
-                process.wait(timeout=15)
-            except (BrokenPipeError, subprocess.TimeoutExpired):
+                process.wait(timeout=30)
+            except (OSError, subprocess.TimeoutExpired):
                 if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGTERM)
+                    terminate(process)
                     process.wait(timeout=15)
+
+
+def terminate(process):
+    if WINDOWS:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+    else:
+        os.killpg(process.pid, signal.SIGTERM)
 
 
 def varint(value):
@@ -144,7 +151,7 @@ def mc_string(value):
 
 @contextlib.contextmanager
 def vanilla_player(console, name):
-    """Connect with the 26.3 vanilla protocol through login and configuration."""
+    """Connect with the 1.21.1 vanilla protocol (767) through login and configuration."""
     address = "127.0.0.1"
     port = console.minecraft_port
     with socket.create_connection((address, port), timeout=15) as connection, connection.makefile("rb") as stream:
@@ -156,7 +163,7 @@ def vanilla_player(console, name):
             length = read_varint(stream)
             return stream.read(length)
 
-        send(0, varint(777) + mc_string(address) + struct.pack(">H", port) + varint(2))  # Login intention
+        send(0, varint(767) + mc_string(address) + struct.pack(">H", port) + varint(2))  # Login intention
         send(0, mc_string(name) + uuid.uuid4().bytes)  # Login hello
         login = receive()
         assert login[0] == 2, f"Expected login success, received {login!r}"
@@ -167,7 +174,7 @@ def vanilla_player(console, name):
             packet_id, payload = packet[0], packet[1:]
             if packet_id == 5:  # Configuration ping
                 send(5, payload)
-            elif packet_id == 15:  # Known packs
+            elif packet_id == 14:  # Known packs
                 send(7, b"\0")
             elif packet_id == 3:  # Finish configuration
                 send(3)
@@ -176,7 +183,7 @@ def vanilla_player(console, name):
                 raise AssertionError("Vanilla player disconnected during configuration")
         console.wait_for(name + " joined the game")
         def command(text):
-            send(7, mc_string(text))  # Unsigned chat command
+            send(4, mc_string(text))  # Unsigned chat command
 
         def wait_for(message):
             deadline = time.monotonic() + 15
@@ -266,7 +273,7 @@ def main(checks=run_checks):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="use only cached Gradle dependencies")
     options = ("--offline",) if parser.parse_args().offline else ()
-    with tempfile.TemporaryDirectory() as directory, ThreadingHTTPServer(("127.0.0.1", 0), TelegramStub) as telegram:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, ThreadingHTTPServer(("127.0.0.1", 0), TelegramStub) as telegram:
         telegram.requests = queue.Queue()
         telegram.responses = queue.Queue()
         threading.Thread(target=telegram.serve_forever, daemon=True).start()

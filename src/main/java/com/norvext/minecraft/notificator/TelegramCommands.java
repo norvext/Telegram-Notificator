@@ -6,6 +6,8 @@ import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.logging.LogUtils;
+import com.norvext.minecraft.notificator.core.MentionPolicy;
+import com.norvext.minecraft.notificator.core.PlayerBindings;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
@@ -15,7 +17,8 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import org.slf4j.Logger;
 
 import java.io.IOException;
-import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Predicate;
@@ -36,13 +39,19 @@ final class TelegramCommands {
 
     void registerCommands(RegisterCommandsEvent event) {
         var mentions = literal("mentions").requires(TelegramCommands::isAdmin);
-        for (var policy : Config.MentionPolicy.values()) {
-            String mode = policy.name().toLowerCase(Locale.ROOT);
+        for (var policy : MentionPolicy.values()) {
+            String mode = policy.id();
             mentions.then(literal(mode).executes(context -> saveSetting(context.getSource(),
                     () -> config.saveMentionPolicy(policy), "Режим упоминаний сохранён: " + mode)));
         }
 
         event.getDispatcher().register(literal("telegram")
+                .executes(context -> help(context.getSource()))
+                .then(literal("help").executes(context -> help(context.getSource())))
+                .then(literal("status").requires(TelegramCommands::isAdmin)
+                        .executes(context -> status(context.getSource())))
+                .then(literal("list").requires(TelegramCommands::isAdmin)
+                        .executes(context -> list(context.getSource())))
                 .then(literal("link").requires(TelegramCommands::isPlayer)
                         .then(argument("username", StringArgumentType.word())
                                 .executes(context -> link(context.getSource(), StringArgumentType.getString(context, "username")))))
@@ -75,6 +84,10 @@ final class TelegramCommands {
                         .then(argument("enabled", BoolArgumentType.bool())
                                 .executes(context -> setStartup(context.getSource(),
                                         BoolArgumentType.getBool(context, "enabled")))))
+                .then(literal("leave").requires(TelegramCommands::isAdmin)
+                        .then(argument("enabled", BoolArgumentType.bool())
+                                .executes(context -> setLeave(context.getSource(),
+                                        BoolArgumentType.getBool(context, "enabled")))))
                 .then(literal("reload").requires(TelegramCommands::isAdmin)
                         .executes(context -> reload(context.getSource())))
                 .then(literal("test").requires(TelegramCommands::isAdmin)
@@ -83,14 +96,85 @@ final class TelegramCommands {
 
     private static boolean isPlayer(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
-        return player != null && source.source == player.commandSource();
+        return player != null && source.source == player;
     }
 
     private static boolean isAdmin(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         return source.source instanceof DedicatedServer
-                || (player != null && source.source == player.commandSource()
-                        && source.getServer().getPlayerList().isOp(player.nameAndId()));
+                || (player != null && source.source == player
+                        && source.getServer().getPlayerList().isOp(player.getGameProfile()));
+    }
+
+    private int help(CommandSourceStack source) {
+        var lines = new ArrayList<String>();
+        lines.add("Telegram Notificator — уведомления сервера в Telegram");
+        if (isPlayer(source)) {
+            String username = config.bindings().get(source.getPlayer().getUUID());
+            lines.add(username == null ? "Ваш Telegram не привязан" : "Ваш Telegram: @" + username);
+            lines.add("/telegram link <username> — привязать Telegram (без @), чтобы бот упоминал вас");
+            lines.add("/telegram unlink — удалить привязку");
+        }
+        if (isAdmin(source)) {
+            lines.addAll(List.of(
+                    "telegram status — текущие настройки",
+                    "telegram list — привязки игроков",
+                    "telegram unlink <username> — снять чужую привязку",
+                    "telegram token set <токен> | token remove — токен бота",
+                    "telegram chat set <chat_id> [topic_id] — группа и тема",
+                    "telegram mentions <all|offline|none> — кого упоминать при входе",
+                    "telegram rejoin set <секунды> — фильтр быстрых перезаходов",
+                    "telegram startup <true|false> — сообщение о запуске сервера",
+                    "telegram leave <true|false> — сообщения о выходе игроков",
+                    "telegram test — пробное сообщение",
+                    "telegram reload — перечитать файл настроек"));
+        }
+        return reply(source, lines);
+    }
+
+    private int status(CommandSourceStack source) {
+        var destination = config.destination();
+        var settings = config.notifications();
+        return reply(source, List.of(
+                config.isConfigured() ? "Telegram Notificator настроен" : "Telegram Notificator не настроен: задайте токен и группу",
+                "Имя сервера: " + settings.serverName(),
+                "Токен: " + (config.token().isEmpty() ? "не задан" : "задан"),
+                "Группа: " + (destination.chatId() == 0 ? "не задана" : destination.chatId())
+                        + ", тема: " + (destination.topicId() == 0 ? "общий чат" : destination.topicId()),
+                "Упоминания: " + config.mentionPolicy().id() + ", фильтр перезахода: " + config.rejoinSeconds() + " с",
+                "Сообщение о запуске: " + onOff(settings.notifyOnStartup())
+                        + ", о выходе: " + onOff(settings.notifyOnLeave()),
+                "Привязок: " + config.bindings().size(),
+                "Файл: " + config.file()));
+    }
+
+    private static String onOff(boolean enabled) {
+        return enabled ? "включено" : "выключено";
+    }
+
+    private int list(CommandSourceStack source) {
+        Map<UUID, String> bindings = config.bindings();
+        if (bindings.isEmpty()) {
+            return reply(source, List.of("Привязок нет"));
+        }
+        var server = source.getServer();
+        var lines = new ArrayList<String>();
+        bindings.forEach((playerId, username) -> {
+            ServerPlayer online = server.getPlayerList().getPlayer(playerId);
+            String name = online != null
+                    ? online.getGameProfile().getName() + " (в игре)"
+                    : server.getProfileCache() == null ? playerId.toString()
+                    : server.getProfileCache().get(playerId).map(profile -> profile.getName()).orElse(playerId.toString());
+            lines.add(name + " — @" + username);
+        });
+        return reply(source, lines);
+    }
+
+    private static int reply(CommandSourceStack source, List<String> lines) {
+        for (String line : lines) {
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return 1;
     }
 
     private int link(CommandSourceStack source, String username) {
@@ -155,6 +239,11 @@ final class TelegramCommands {
                 enabled ? "Уведомление о запуске включено" : "Уведомление о запуске выключено");
     }
 
+    private int setLeave(CommandSourceStack source, boolean enabled) {
+        return saveSetting(source, () -> config.saveNotifyOnLeave(enabled),
+                enabled ? "Уведомление о выходе включено" : "Уведомление о выходе выключено");
+    }
+
     private int reload(CommandSourceStack source) {
         try {
             config.reload();
@@ -189,12 +278,12 @@ final class TelegramCommands {
     }
 
     private int sendTest(CommandSourceStack source) {
-        if (!notifications.isConfigured()) {
+        if (!config.isConfigured()) {
             source.sendFailure(Component.literal("Задайте токен и группу уведомлений"));
             return 0;
         }
 
-        notifications.sendTest().thenAccept(error -> source.getServer().execute(() -> {
+        notifications.sendTest(source.getServer()).thenAccept(error -> source.getServer().execute(() -> {
             if (error.isPresent()) {
                 source.sendFailure(Component.literal("Пробное сообщение не отправлено: " + error.get()));
             } else {
